@@ -44,6 +44,7 @@ import (
 	"github.com/gravitational/teleport/lib/defaults"
 	"github.com/gravitational/teleport/lib/events"
 	"github.com/gravitational/teleport/lib/limiter"
+	"github.com/gravitational/teleport/lib/multiplexer"
 	"github.com/gravitational/teleport/lib/reversetunnel"
 	"github.com/gravitational/teleport/lib/services"
 	"github.com/gravitational/teleport/lib/session"
@@ -96,6 +97,7 @@ type Connector struct {
 // TeleportProcess structure holds the state of the Teleport daemon, controlling
 // execution and configuration of the teleport services: ssh, auth and proxy.
 type TeleportProcess struct {
+	*log.Entry
 	clockwork.Clock
 	sync.Mutex
 	Supervisor
@@ -417,6 +419,24 @@ func (process *TeleportProcess) initAuthService(authority auth.Authority) error 
 		return trace.Wrap(err)
 	}
 
+	// auth server listens on SSH and TLS, reusing the same socket
+	listener, err := net.Listen("tcp", cfg.Auth.SSHAddr.Addr)
+	if err != nil {
+		utils.Consolef(cfg.Console, "[AUTH]  failed to bind to address %v, exiting", cfg.Auth.SSHAddr.Addr, err)
+		return trace.Wrap(err)
+	}
+	process.onExit(func(payload interface{}) {
+		log.Debugf("closing listener: %v", listener.Addr())
+		listener.Close()
+	})
+	mux, err := multiplexer.New(multiplexer.Config{
+		Listener: listener,
+	})
+	if err != nil {
+		return trace.Wrap(err)
+	}
+	go mux.Serve()
+
 	// Register an SSH endpoint which is used to create an SSH tunnel to send HTTP
 	// requests to the Auth API
 	var authTunnel *auth.AuthTunnel
@@ -432,7 +452,7 @@ func (process *TeleportProcess) initAuthService(authority auth.Authority) error 
 			utils.Consolef(cfg.Console, "[AUTH] Error: %v", err)
 			return trace.Wrap(err)
 		}
-		if err := authTunnel.Start(); err != nil {
+		if err := authTunnel.Serve(mux.SSH()); err != nil {
 			if askedToExit {
 				log.Infof("[AUTH] Auth Tunnel exited")
 				return nil
@@ -440,6 +460,12 @@ func (process *TeleportProcess) initAuthService(authority auth.Authority) error 
 			utils.Consolef(cfg.Console, "[AUTH] Error: %v", err)
 			return trace.Wrap(err)
 		}
+		return nil
+	})
+
+	// Register TLS endpoint of the auth service
+	process.RegisterFunc(func() error {
+
 		return nil
 	})
 
@@ -508,6 +534,7 @@ func (process *TeleportProcess) initAuthService(authority auth.Authority) error 
 	// execute this when process is asked to exit:
 	process.onExit(func(payload interface{}) {
 		askedToExit = true
+		mux.Close()
 		authTunnel.Close()
 		log.Infof("[AUTH] auth service exited")
 	})

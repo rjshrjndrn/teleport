@@ -158,6 +158,10 @@ func (s *AuthTunnel) Addr() string {
 	return s.sshServer.Addr()
 }
 
+func (s *AuthTunnel) Serve(l net.Listener) error {
+	return s.sshServer.Serve(l)
+}
+
 func (s *AuthTunnel) Start() error {
 	return s.sshServer.Start()
 }

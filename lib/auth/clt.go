@@ -19,6 +19,7 @@ package auth
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -71,6 +72,50 @@ func NewTracer() roundtrip.RequestTracer {
 		return roundtrip.NewWriterTracer(log.StandardLogger().Writer())
 	}
 	return roundtrip.NewNopTracer()
+}
+
+// NewTLSClient returns new client using TLS mutual authentication
+func NewTLSClient(addrs []string, cfg *tls.Config) (*Client, error) {
+	dialer := net.Dialer{
+		Timeout:   defaults.DefaultDialTimeout,
+		KeepAlive: defaults.ReverseTunnelAgentHeartbeatPeriod,
+	}
+	transport := &http.Transport{
+		// notice that below roundtrip.Client is passed
+		// teleport.APIEndpoint as an address for the API server, this is
+		// to make sure client verifies the DNS name of the API server
+		// custom DialContext overrrides this DNS name to the real address
+		// in addition this dialer tries multiple adresses if provided
+		DialContext: func(in context.Context, network, _ string) (net.Conn, error) {
+			var err error
+			var conn net.Conn
+			for _, addr := range addrs {
+				conn, err = dialer.DialContext(in, network, addr)
+				if err == nil {
+					return conn, nil
+				}
+			}
+			return conn, nil
+		},
+		ResponseHeaderTimeout: defaults.DefaultDialTimeout,
+		TLSClientConfig:       cfg,
+		MaxIdleConnsPerHost:   defaults.HTTPIdleConnsPerHost,
+		// IdleConnTimeout defines the maximum amount of time before idle connections
+		// are closed. Leaving this unset will lead to connections open forever and
+		// will cause memory leaks in a long running process
+		IdleConnTimeout: defaults.HTTPIdleTimeout,
+	}
+
+	roundtripClient, err := roundtrip.NewClient(teleport.APIEndpoint, CurrentVersion, roundtrip.HTTPClient(&http.Client{
+		Transport: transport,
+	}))
+	if err != nil {
+		return nil, trace.Wrap(err)
+	}
+	return &Client{
+		Client:    *roundtripClient,
+		transport: transport,
+	}, nil
 }
 
 // NewAuthClient returns a new instance of the client which talks to

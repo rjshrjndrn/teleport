@@ -78,6 +78,15 @@ func (roles Roles) Include(role Role) bool {
 	return false
 }
 
+// Slice returns roles as string slice
+func (roles Roles) StringSlice() []string {
+	s := make([]string, 0)
+	for _, r := range roles {
+		s = append(s, string(r))
+	}
+	return s
+}
+
 // Equals compares two sets of roles
 func (roles Roles) Equals(other Roles) bool {
 	if len(roles) != len(other) {
@@ -101,12 +110,9 @@ func (roles Roles) Check() (err error) {
 	return nil
 }
 
+// String returns comma separated string with roles
 func (roles Roles) String() string {
-	s := make([]string, 0)
-	for _, r := range roles {
-		s = append(s, string(r))
-	}
-	return strings.Join(s, ",")
+	return strings.Join(roles.StringSlice(), ",")
 }
 
 // Set sets the value of the role from string, used to integrate with CLI tools

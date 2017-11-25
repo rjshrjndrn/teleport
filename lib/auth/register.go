@@ -33,8 +33,7 @@ func LocalRegister(dataDir string, id IdentityID, authServer *AuthServer) error 
 	if err != nil {
 		return trace.Wrap(err)
 	}
-
-	return writeKeys(dataDir, id, keys.Key, keys.Cert)
+	return writeKeys(dataDir, id, keys.Key, keys.Cert, keys.TLSCert)
 }
 
 // Register is used to generate host keys when a node or proxy are running on different hosts
@@ -68,7 +67,7 @@ func Register(dataDir, token string, id IdentityID, servers []utils.NetAddr) err
 		return trace.Wrap(err)
 	}
 
-	return writeKeys(dataDir, id, keys.Key, keys.Cert)
+	return writeKeys(dataDir, id, keys.Key, keys.Cert, keys.TLSCert)
 }
 
 func RegisterNewAuth(domainName, token string, servers []utils.NetAddr) error {
@@ -107,6 +106,7 @@ func readToken(token string) (string, error) {
 }
 
 type PackedKeys struct {
-	Key  []byte `json:"key"`
-	Cert []byte `json:"cert"`
+	Key     []byte `json:"key"`
+	Cert    []byte `json:"cert"`
+	TLSCert []byte `json:"tls_cert"`
 }

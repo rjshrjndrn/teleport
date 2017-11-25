@@ -226,3 +226,6 @@ const AdminRoleName = "admin"
 // DefaultImplicitRole is implicit role that gets added to all service.RoleSet
 // objects.
 const DefaultImplicitRole = "default-implicit-role"
+
+// APIEndpoint is a default endpoint for Auth server API
+const APIEndpoint = "teleport.cluster.local"
