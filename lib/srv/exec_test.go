@@ -80,7 +80,7 @@ func (s *ExecSuite) SetUpSuite(c *check.C) {
 	s.ctx.session = &session{id: "xxx"}
 	s.ctx.TeleportUser = "galt"
 	s.ctx.Conn = &ssh.ServerConn{Conn: s}
-	s.ctx.ExecRequest = &LocalExecRequest{Ctx: s.ctx}
+	s.ctx.ExecRequest = &localExec{Ctx: s.ctx}
 	s.localAddr, _ = utils.ParseAddr("127.0.0.1:3022")
 	s.remoteAddr, _ = utils.ParseAddr("10.0.0.5:4817")
 }
