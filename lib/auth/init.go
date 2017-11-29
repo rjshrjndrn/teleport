@@ -464,7 +464,7 @@ func initKeys(a *AuthServer, dataDir string, id IdentityID) (*Identity, error) {
 		}
 
 		a.Debugf("writing keys to disk for %v", id)
-		err = writeKeys(dataDir, id, packedKeys.Key, packedKeys.Cert, packedKeys.TLSCert)
+		err = writeKeys(dataDir, id, packedKeys.Key, packedKeys.Cert, packedKeys.TLSCert, packedKeys.TLSCACert)
 		if err != nil {
 			return nil, trace.Wrap(err)
 		}
@@ -478,16 +478,19 @@ func initKeys(a *AuthServer, dataDir string, id IdentityID) (*Identity, error) {
 
 // writeKeys saves the key/cert pair for a given domain onto disk. This usually means the
 // domain trusts us (signed our public key)
-func writeKeys(dataDir string, id IdentityID, key []byte, sshCert []byte, tlsCert []byte) error {
+func writeKeys(dataDir string, id IdentityID, key []byte, sshCert []byte, tlsCert []byte, tlsCACert []byte) error {
 	path := keysPath(dataDir, id)
 
-	if err := ioutil.WriteFile(path.key, key, 0600); err != nil {
+	if err := ioutil.WriteFile(path.key, key, teleport.FileMaskOwnerOnly); err != nil {
 		return trace.Wrap(err)
 	}
-	if err := ioutil.WriteFile(path.sshCert, sshCert, 0600); err != nil {
+	if err := ioutil.WriteFile(path.sshCert, sshCert, teleport.FileMaskOwnerOnly); err != nil {
 		return trace.Wrap(err)
 	}
-	if err := ioutil.WriteFile(path.tlsCert, tlsCert, 0600); err != nil {
+	if err := ioutil.WriteFile(path.tlsCert, tlsCert, teleport.FileMaskOwnerOnly); err != nil {
+		return trace.Wrap(err)
+	}
+	if err := ioutil.WriteFile(path.tlsCACert, tlsCACert, teleport.FileMaskOwnerOnly); err != nil {
 		return trace.Wrap(err)
 	}
 	return nil
@@ -495,30 +498,39 @@ func writeKeys(dataDir string, id IdentityID, key []byte, sshCert []byte, tlsCer
 
 // Identity is a collection of certificates and signers that represent identity
 type Identity struct {
-	ID           IdentityID
-	KeyBytes     []byte
-	CertBytes    []byte
-	TLSCertBytes []byte
-	TLSCABytes   []byte
-	KeySigner    ssh.Signer
-	Cert         *ssh.Certificate
-	TLSCert      tls.Certificate
-	ClusterName  string
+	ID             IdentityID
+	KeyBytes       []byte
+	CertBytes      []byte
+	TLSCertBytes   []byte
+	TLSCACertBytes []byte
+	KeySigner      ssh.Signer
+	Cert           *ssh.Certificate
+	TLSCert        *tls.Certificate
+	ClusterName    string
+}
+
+// HasTSLConfig returns true if this identity has TLS certificate and private key
+func (i *Identity) HasTLSConfig() bool {
+	return len(i.TLSCACertBytes) != 0 && len(i.TLSCertBytes) != 0
 }
 
 // TLSConfig returns TLS config for mutual TLS authentication
+// can return NotFound error if there is no TLS credentials
+// provisioned yet
 func (i *Identity) TLSConfig() (*tls.Config, error) {
+	if len(i.TLSCACertBytes) == 0 || len(i.TLSCertBytes) == 0 || i.TLSCert == nil {
+		return nil, trace.NotFound("no TLS credentials setup for this identity")
+	}
 	certPool := x509.NewCertPool()
-	x509.ParseCertificate(i.TLSCABytes)
-	certPool.AppendCertsFromPEM(i.TLSCABytes)
-	cert, err := tlsca.ParseCertificatePEM(i.TLSCertBytes)
+	parsedCert, err := x509.ParseCertificate(i.TLSCACertBytes)
 	if err != nil {
-		return nil, trace.Wrap(err, "failed to parse TLS certificate")
+		return nil, trace.Wrap(err, "failed to parse CA certificate")
 	}
+	certPool.AddCert(parsedCert)
 	return &tls.Config{
-		Certificates: []tls.Certificate{i.TLSCert},
+		Certificates: []tls.Certificate{*i.TLSCert},
 		RootCAs:      certPool,
-	}
+	}, nil
 }
 
 // IdentityID is a combination of role, host UUID, and node name.
@@ -594,7 +606,7 @@ func ReadTLSIdentityFromKeyPair(keyBytes, certBytes []byte) (*Identity, error) {
 		ClusterName:  clusterName,
 		KeyBytes:     keyBytes,
 		TLSCertBytes: certBytes,
-		TLSCert:      tlsCert,
+		TLSCert:      &tlsCert,
 	}, nil
 }
 
@@ -702,7 +714,7 @@ func ReadIdentity(dataDir string, id IdentityID) (i *Identity, err error) {
 // WriteIdentity writes identity keypair to disk
 func WriteIdentity(dataDir string, identity *Identity) error {
 	return trace.Wrap(
-		writeKeys(dataDir, identity.ID, identity.KeyBytes, identity.CertBytes, identity.TLSCertBytes))
+		writeKeys(dataDir, identity.ID, identity.KeyBytes, identity.CertBytes, identity.TLSCertBytes, identity.TLSCACertBytes))
 }
 
 // HaveHostKeys checks that host keys are in place
@@ -728,17 +740,20 @@ func HaveHostKeys(dataDir string, id IdentityID) (bool, error) {
 }
 
 type paths struct {
-	key     string
-	sshCert string
-	tlsCert string
+	dataDir   string
+	key       string
+	sshCert   string
+	tlsCert   string
+	tlsCACert string
 }
 
 // keysPath returns two full file paths: to the host.key and host.cert
 func keysPath(dataDir string, id IdentityID) paths {
 	return paths{
-		key:     filepath.Join(dataDir, fmt.Sprintf("%s.key", strings.ToLower(string(id.Role)))),
-		sshCert: filepath.Join(dataDir, fmt.Sprintf("%s.cert", strings.ToLower(string(id.Role)))),
-		tlsCert: filepath.Join(dataDir, fmt.Sprintf("%s.tlscert", strings.ToLower(string(id.Role)))),
+		key:       filepath.Join(dataDir, fmt.Sprintf("%s.key", strings.ToLower(string(id.Role)))),
+		sshCert:   filepath.Join(dataDir, fmt.Sprintf("%s.cert", strings.ToLower(string(id.Role)))),
+		tlsCert:   filepath.Join(dataDir, fmt.Sprintf("%s.tlscert", strings.ToLower(string(id.Role)))),
+		tlsCACert: filepath.Join(dataDir, fmt.Sprintf("%s.tlscacert", strings.ToLower(string(id.Role)))),
 	}
 }
 

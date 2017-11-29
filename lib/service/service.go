@@ -1,5 +1,5 @@
 /*
-Copyright 2015 Gravitational, Inc.
+Copyright 2015-2017 Gravitational, Inc.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -91,7 +91,7 @@ type RoleConfig struct {
 // to other parts of the cluster: client and identity
 type Connector struct {
 	Identity *auth.Identity
-	Client   *auth.TunClient
+	Client   *auth.Client
 }
 
 // TeleportProcess structure holds the state of the Teleport daemon, controlling
@@ -139,6 +139,22 @@ func (process *TeleportProcess) findStaticIdentity(id auth.IdentityID) (*auth.Id
 	return nil, trace.NotFound("identity %v not found", &id)
 }
 
+// readIdentity reads identity from disk and resets the local state
+func (process *TeleportProcess) readIdentity(role teleport.Role) (*auth.Identity, error) {
+	var found bool
+
+	process.Lock()
+	defer process.Unlock()
+
+	id := auth.IdentityID{HostUUID: process.Config.HostUUID, Role: role}
+	identity, err := auth.ReadIdentity(process.Config.DataDir, id)
+	if err != nil {
+		return nil, trace.Wrap(err)
+	}
+	process.Identities[role] = identity
+	return identity, nil
+}
+
 // GetIdentity returns the process identity (credentials to the auth server) for a given
 // teleport Role. A teleport process can have any combination of 3 roles: auth, node, proxy
 // and they have their own identities
@@ -157,7 +173,7 @@ func (process *TeleportProcess) GetIdentity(role teleport.Role) (i *auth.Identit
 	i, err = auth.ReadIdentity(process.Config.DataDir, id)
 	if err != nil {
 		if trace.IsNotFound(err) {
-			// try to locate static identity provide in the file
+			// try to locate static identity provided in the file
 			i, err = process.findStaticIdentity(id)
 			if err != nil {
 				return nil, trace.Wrap(err)
@@ -181,24 +197,48 @@ func (process *TeleportProcess) connectToAuthService(role teleport.Role) (*Conne
 	if err != nil {
 		return nil, trace.Wrap(err)
 	}
-	storage := utils.NewFileAddrStorage(
-		filepath.Join(process.Config.DataDir, "authservers.json"))
+	l := log.WithFields(log.Fields{trace.Component: string(role)})
+	tlsConfig, err := identity.TLSConfig()
+	if err != nil {
+		if !trace.IsNotFound(err) {
+			return nil, trace.Wrap(err)
+		}
+		// connect using legacy SSH and get new set of TLS credentials
+		l.Infof("connecting to the cluster to fetch TLS certificates")
+		storage := utils.NewFileAddrStorage(
+			filepath.Join(process.Config.DataDir, "authservers.json"))
 
-	authUser := identity.Cert.ValidPrincipals[0]
-	authClient, err := auth.NewTunClient(
-		string(role),
-		process.Config.AuthServers,
-		authUser,
-		[]ssh.AuthMethod{ssh.PublicKeys(identity.KeySigner)},
-		auth.TunClientStorage(storage),
-	)
-	// success?
+		authUser := identity.Cert.ValidPrincipals[0]
+		authClient, err := auth.NewTunClient(
+			string(role),
+			process.Config.AuthServers,
+			authUser,
+			[]ssh.AuthMethod{ssh.PublicKeys(identity.KeySigner)},
+			auth.TunClientStorage(storage),
+			auth.TunDisableRefresh(),
+		)
+		if err != nil {
+			return nil, trace.Wrap(err)
+		}
+		defer authClient.Close()
+		if err := auth.ReRegister(process.Config.DataDir, authClient, identity.ID); err != nil {
+			return nil, trace.Wrap(err)
+		}
+		if identity, err = process.readIdentity(role); err != nil {
+			return nil, trace.Wrap(err)
+		}
+		tlsConfig, err = identity.TLSConfig()
+		if err != nil {
+			return nil, trace.Wrap(err)
+		}
+		l.Infof("received new TLS identity")
+	}
+	client, err := auth.NewTLSClient(process.Config.AuthServers, tlsConfig)
 	if err != nil {
 		return nil, trace.Wrap(err)
 	}
 	// success ? we're logged in!
-	log.Infof("[Node] %s connected to the cluster", authUser)
-	return &Connector{Client: authClient, Identity: identity}, nil
+	return &Connector{Client: client, Identity: identity}, nil
 }
 
 // NewTeleport takes the daemon configuration, instantiates all required services
@@ -464,8 +504,9 @@ func (process *TeleportProcess) initAuthService(authority auth.Authority) error 
 	})
 
 	// Register TLS endpoint of the auth service
+	panic("do add TLS")
 	process.RegisterFunc(func() error {
-
+		// TLSAUTH
 		return nil
 	})
 
@@ -665,7 +706,7 @@ func (process *TeleportProcess) RegisterWithAuthServer(token string, role telepo
 	// this means the server has not been initialized yet, we are starting
 	// the registering client that attempts to connect to the auth server
 	// and provision the keys
-	var authClient *auth.TunClient
+	var authClient *auth.Client
 	process.RegisterFunc(func() error {
 		retryTime := defaults.ServerHeartbeatTTL / 3
 		for {

@@ -39,6 +39,7 @@ import (
 	"github.com/gravitational/teleport/lib/httplib"
 	"github.com/gravitational/teleport/lib/services"
 	"github.com/gravitational/teleport/lib/session"
+	"github.com/gravitational/teleport/lib/utils"
 	"github.com/gravitational/trace"
 
 	log "github.com/sirupsen/logrus"
@@ -75,7 +76,7 @@ func NewTracer() roundtrip.RequestTracer {
 }
 
 // NewTLSClient returns new client using TLS mutual authentication
-func NewTLSClient(addrs []string, cfg *tls.Config) (*Client, error) {
+func NewTLSClient(addrs []utils.NetAddr, cfg *tls.Config) (*Client, error) {
 	dialer := net.Dialer{
 		Timeout:   defaults.DefaultDialTimeout,
 		KeepAlive: defaults.ReverseTunnelAgentHeartbeatPeriod,
@@ -90,7 +91,7 @@ func NewTLSClient(addrs []string, cfg *tls.Config) (*Client, error) {
 			var err error
 			var conn net.Conn
 			for _, addr := range addrs {
-				conn, err = dialer.DialContext(in, network, addr)
+				conn, err = dialer.DialContext(in, network, addr.Addr)
 				if err == nil {
 					return conn, nil
 				}
@@ -146,6 +147,13 @@ func NewClient(addr string, dialer Dialer, params ...roundtrip.ClientParam) (*Cl
 		Client:    *c,
 		transport: transport,
 	}, nil
+}
+
+// GetAgent creates an SSH key agent (similar object to what CLI uses), this
+// key agent fetches user keys directly from the auth server using a custom channel
+// created via "ReqWebSessionAgent" reguest
+func (c *Client) GetAgent() (AgentCloser, error) {
+	panic("not implemented")
 }
 
 func (c *Client) GetTransport() *http.Transport {
@@ -385,6 +393,25 @@ func (c *Client) RegisterUsingToken(token, hostID string, nodeName string, role 
 		return nil, trace.Wrap(err)
 	}
 
+	var keys PackedKeys
+	if err := json.Unmarshal(out.Bytes(), &keys); err != nil {
+		return nil, trace.Wrap(err)
+	}
+
+	return &keys, nil
+}
+
+// RenewCredentials returns a new set of credentials associated
+// with the server with the same privileges
+func (c *Client) GenerateServerKeys(hostID string, nodeName string, roles teleport.Roles) (*PackedKeys, error) {
+	out, err := c.PostJSON(c.Endpoint("server", "credentials"), generateServerKeysReq{
+		HostID:   hostID,
+		NodeName: nodeName,
+		Roles:    roles,
+	})
+	if err != nil {
+		return nil, trace.Wrap(err)
+	}
 	var keys PackedKeys
 	if err := json.Unmarshal(out.Bytes(), &keys); err != nil {
 		return nil, trace.Wrap(err)
@@ -1930,4 +1957,7 @@ type ClientI interface {
 
 	ValidateTrustedCluster(*ValidateTrustedClusterRequest) (*ValidateTrustedClusterResponse, error)
 	GetDomainName() (string, error)
+	// GenerateServerKeys generates new host private keys and certificates (signed
+	// by the host certificate authority) for a node
+	GenerateServerKeys(hostID string, nodeName string, roles teleport.Roles) (*PackedKeys, error)
 }

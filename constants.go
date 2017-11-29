@@ -154,6 +154,10 @@ const (
 	// DirMaskSharedGroup is the mask for a directory accessible
 	// by the owner and group
 	DirMaskSharedGroup = 0770
+
+	// FileMaskOwnerOnly is the file mask that allows read write access
+	// to owers only
+	FileMaskOwnerOnly = 0600
 )
 
 const (

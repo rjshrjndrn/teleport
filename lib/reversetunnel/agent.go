@@ -64,7 +64,7 @@ type AgentConfig struct {
 	// Signers contains authentication signers
 	Signers []ssh.Signer
 	// Client is a client to the local auth servers
-	Client *auth.TunClient
+	Client auth.ClientI
 	// AccessPoint is a caching access point to the local auth servers
 	AccessPoint auth.AccessPoint
 	// Context is a parent context

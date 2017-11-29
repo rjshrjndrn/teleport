@@ -55,6 +55,19 @@ const (
 // this constant exists for backwards compatibility reasons, needed to upgrade to 2.3
 const LegacyClusterTokenType Role = "Trustedcluster"
 
+// NewRoles return a list of roles from slice of strings
+func NewRoles(in []string) (Roles, error) {
+	var roles Roles
+	for _, val := range in {
+		role := Role(val)
+		if err := role.Check(); err != nil {
+			return nil, trace.Wrap(err)
+		}
+		roles = append(roles, role)
+	}
+	return roles, nil
+}
+
 // ParseRoles takes a comma-separated list of roles and returns a slice
 // of roles, or an error if parsing failed
 func ParseRoles(str string) (roles Roles, err error) {

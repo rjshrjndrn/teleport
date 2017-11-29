@@ -569,9 +569,10 @@ func (s *AuthServer) GenerateServerKeys(hostID string, nodeName string, roles te
 	}
 
 	return &PackedKeys{
-		Key:     privateKeyPEM,
-		Cert:    hostSSHCert,
-		TLSCert: hostTLSCert,
+		Key:       privateKeyPEM,
+		Cert:      hostSSHCert,
+		TLSCert:   hostTLSCert,
+		TLSCACert: []byte(ca.GetTLSCert()),
 	}, nil
 }
 
